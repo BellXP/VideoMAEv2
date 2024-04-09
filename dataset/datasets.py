@@ -9,7 +9,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 from . import video_transforms, volume_transforms
-from .loader import get_image_loader, get_video_loader
+from .loader import get_image_loader, get_video_loader, get_skeleton_image_loader
 from .random_erasing import RandomErasing
 
 
@@ -346,7 +346,8 @@ class RawFrameClsDataset(Dataset):
                  test_num_crop=3,
                  filename_tmpl='img_{:05}.jpg',
                  start_idx=1,
-                 args=None):
+                 args=None,
+                 use_skeleton_image_loader=False):
         self.anno_path = anno_path
         self.data_root = data_root
         self.mode = mode
@@ -371,7 +372,8 @@ class RawFrameClsDataset(Dataset):
             if self.args.reprob > 0:
                 self.rand_erase = True
 
-        self.image_loader = get_image_loader()
+        self.use_skeleton_image_loader = use_skeleton_image_loader
+        self.image_loader = get_skeleton_image_loader() if use_skeleton_image_loader else get_image_loader()
 
         cleaned = pd.read_csv(self.anno_path, header=None, delimiter=' ')
         self.dataset_samples = list(
@@ -513,10 +515,9 @@ class RawFrameClsDataset(Dataset):
             interpolation=args.train_interpolation,
         )
 
-        buffer = [transforms.ToPILImage()(frame) for frame in buffer]
-
-        buffer = aug_transform(buffer)
-
+        if not self.use_skeleton_image_loader:
+            buffer = [transforms.ToPILImage()(frame) for frame in buffer]
+            buffer = aug_transform(buffer)
         buffer = [transforms.ToTensor()(img) for img in buffer]
         buffer = torch.stack(buffer)  # T C H W
         buffer = buffer.permute(0, 2, 3, 1)  # T H W C
@@ -576,7 +577,7 @@ class RawFrameClsDataset(Dataset):
             for idx in all_index:
                 frame_fname = os.path.join(fname,
                                            self.filename_tmpl.format(idx))
-                img = self.image_loader(frame_fname)
+                img = self.image_loader(frame_fname, (self.new_height, self.new_width))
                 imgs.append(img)
             buffer = np.array(imgs)
             return buffer
@@ -610,7 +611,7 @@ class RawFrameClsDataset(Dataset):
         imgs = []
         for idx in all_index:
             frame_fname = os.path.join(fname, self.filename_tmpl.format(idx))
-            img = self.image_loader(frame_fname)
+            img = self.image_loader(frame_fname, (self.new_height, self.new_width))
             imgs.append(img)
         buffer = np.array(imgs)
         return buffer

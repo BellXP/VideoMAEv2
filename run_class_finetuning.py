@@ -318,7 +318,7 @@ def get_args():
         default='Kinetics-400',
         choices=[
             'Kinetics-400', 'Kinetics-600', 'Kinetics-700', 'SSV2', 'UCF101',
-            'HMDB51', 'Diving48', 'Kinetics-710', 'MIT'
+            'HMDB51', 'Diving48', 'Kinetics-710', 'MIT', 'Skeleton'
         ],
         type=str,
         help='dataset')
@@ -382,15 +382,20 @@ def get_args():
         default=1,
         type=int,
         help='number of distributed processes')
-    parser.add_argument('--local_rank', default=-1, type=int)
+    parser.add_argument('--local-rank', default=-1, type=int)
     parser.add_argument('--dist_on_itp', action='store_true')
     parser.add_argument(
         '--dist_url',
         default='env://',
         help='url used to set up distributed training')
 
+    parser.add_argument('--data-split-seed', default=-1, type=int)
+
     parser.add_argument(
         '--enable_deepspeed', action='store_true', default=False)
+
+    parser.add_argument(
+        '--classifier_only', action='store_true', help='only tune the classifier')
 
     known_args, _ = parser.parse_known_args()
 
@@ -742,7 +747,7 @@ def main(args, ds_init):
 
         optimizer = create_optimizer(
             args,
-            model_without_ddp,
+            model_without_ddp.get_classifier() if args.classifier_only else model_without_ddp,
             skip_list=skip_weight_decay_list,
             get_num_layer=assigner.get_layer_id
             if assigner is not None else None,
@@ -786,15 +791,16 @@ def main(args, ds_init):
         loss_scaler=loss_scaler,
         model_ema=model_ema)
     if args.validation:
-        test_stats = validation_one_epoch(data_loader_val, model, device)
-        print(
-            f"{len(dataset_val)} val images: Top-1 {test_stats['acc1']:.2f}%, Top-5 {test_stats['acc5']:.2f}%, loss {test_stats['loss']:.4f}"
-        )
+        test_stats = validation_one_epoch(data_loader_val, model, device, args.data_set == 'Skeleton')
+        if args.data_set == 'Skeleton':
+            print(f"{len(dataset_val)} val images: loss {test_stats['loss']:.4f}, Avg {test_stats['avg_acc']:.2f}%, Neg {test_stats['neg_acc']:.2f}%, Cri {test_stats['cri_acc']:.2f}%, Pos {test_stats['pos_acc']:.2f}%")
+        else:
+            print(f"{len(dataset_val)} val images: Top-1 {test_stats['acc1']:.2f}%, Top-5 {test_stats['acc5']:.2f}%, loss {test_stats['loss']:.4f}")
         exit(0)
 
     if args.eval:
         preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
-        test_stats = final_test(data_loader_test, model, device, preds_file)
+        test_stats = final_test(data_loader_test, model, device, preds_file, args.data_set == 'Skeleton')
         torch.distributed.barrier()
         if global_rank == 0:
             print("Start merging results...")
@@ -850,12 +856,13 @@ def main(args, ds_init):
                     epoch=epoch,
                     model_ema=model_ema)
         if data_loader_val is not None:
-            test_stats = validation_one_epoch(data_loader_val, model, device)
+            test_stats = validation_one_epoch(data_loader_val, model, device, args.data_set == 'Skeleton')
+            test_accuracy = test_stats['avg_acc'] if args.data_set == 'Skeleton' else test_stats['acc1']
             print(
-                f"Accuracy of the network on the {len(dataset_val)} val images: {test_stats['acc1']:.2f}%"
+                f"Accuracy of the network on the {len(dataset_val)} val images: {test_accuracy:.2f}%"
             )
-            if max_accuracy < test_stats["acc1"]:
-                max_accuracy = test_stats["acc1"]
+            if max_accuracy < test_accuracy:
+                max_accuracy = test_accuracy
                 if args.output_dir and args.save_ckpt:
                     utils.save_model(
                         args=args,
@@ -869,11 +876,21 @@ def main(args, ds_init):
             print(f'Max accuracy: {max_accuracy:.2f}%')
             if log_writer is not None:
                 log_writer.update(
-                    val_acc1=test_stats['acc1'], head="perf", step=epoch)
-                log_writer.update(
-                    val_acc5=test_stats['acc5'], head="perf", step=epoch)
-                log_writer.update(
                     val_loss=test_stats['loss'], head="perf", step=epoch)
+                if args.data_set == 'Skeleton':
+                    log_writer.update(
+                        val_avg=test_stats['avg_acc'], head="perf", step=epoch)
+                    log_writer.update(
+                        val_neg=test_stats['neg_acc'], head="perf", step=epoch)
+                    log_writer.update(
+                        val_cri=test_stats['cri_acc'], head="perf", step=epoch)
+                    log_writer.update(
+                        val_pos=test_stats['pos_acc'], head="perf", step=epoch)
+                else:
+                    log_writer.update(
+                        val_acc1=test_stats['acc1'], head="perf", step=epoch)
+                    log_writer.update(
+                        val_acc5=test_stats['acc5'], head="perf", step=epoch)
 
             log_stats = {
                 **{f'train_{k}': v
@@ -898,7 +915,7 @@ def main(args, ds_init):
                 f.write(json.dumps(log_stats) + "\n")
 
     preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
-    test_stats = final_test(data_loader_test, model, device, preds_file)
+    test_stats = final_test(data_loader_test, model, device, preds_file, args.data_set == 'Skeleton')
     torch.distributed.barrier()
 
     if global_rank == 0:

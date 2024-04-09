@@ -94,7 +94,9 @@ def train_one_epoch(model: torch.nn.Module,
             loss, output = train_class_batch(model, samples, targets,
                                              criterion)
         else:
-            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            torch_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            samples = samples.to(torch_dtype)
+            with torch.cuda.amp.autocast(dtype=torch_dtype):
                 loss, output = train_class_batch(model, samples, targets,
                                                  criterion)
 
@@ -175,8 +177,20 @@ def train_one_epoch(model: torch.nn.Module,
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
+def skeleton_accuracy(output, target):
+    num_classes = output.size()[1]
+    class_correct = torch.zeros(num_classes).to(target.device)
+    class_counts = torch.bincount(target, minlength=num_classes)
+
+    _, pred = output.max(1)
+    class_correct.scatter_add_(0, target, pred.eq(target).float())
+    class_accuracy = class_correct * 100. / torch.where(class_counts == 0, 1, class_counts)
+
+    return class_accuracy[0].item(), class_accuracy[1].item(), class_accuracy[2].item(), class_counts[0].item(), class_counts[1].item(), class_counts[2].item()
+
+
 @torch.no_grad()
-def validation_one_epoch(data_loader, model, device):
+def validation_one_epoch(data_loader, model, device, is_skeleton=False):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -196,26 +210,45 @@ def validation_one_epoch(data_loader, model, device):
             output = model(images)
             loss = criterion(output, target)
 
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        if is_skeleton:
+            neg_acc, cri_acc, pos_acc, neg_num, cri_num, pos_num = skeleton_accuracy(output, target)
+        else:
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
 
-        batch_size = images.shape[0]
         metric_logger.update(loss=loss.item())
-        metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
-        metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
+        if is_skeleton:
+            if neg_num > 0:
+                metric_logger.meters['neg_acc'].update(neg_acc, n=neg_num)
+            if cri_num > 0:
+                metric_logger.meters['cri_acc'].update(cri_acc, n=cri_num)
+            if pos_num > 0:
+                metric_logger.meters['pos_acc'].update(pos_acc, n=pos_num)
+        else:
+            batch_size = images.shape[0]
+            metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
+            metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    print(
-        '* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'
-        .format(
-            top1=metric_logger.acc1,
-            top5=metric_logger.acc5,
-            losses=metric_logger.loss))
+    if is_skeleton:
+        neg_acc = metric_logger.neg_acc.global_avg
+        cri_acc = metric_logger.cri_acc.global_avg
+        pos_acc = metric_logger.pos_acc.global_avg
+        avg_acc = (neg_acc + cri_acc + pos_acc) / 3
+        metric_logger.meters['avg_acc'].update(avg_acc, n=1)
+        print(f'* Acc@Avg {avg_acc:.3f} Acc@Neg {neg_acc:.3f} Acc@Cri {cri_acc:.3f} Acc@Pos {pos_acc:.3f} loss {metric_logger.loss.global_avg:.3f}')
+    else:
+        print(
+            '* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'
+            .format(
+                top1=metric_logger.acc1,
+                top5=metric_logger.acc5,
+                losses=metric_logger.loss))
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
 @torch.no_grad()
-def final_test(data_loader, model, device, file):
+def final_test(data_loader, model, device, file, is_skeleton=False):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -247,27 +280,49 @@ def final_test(data_loader, model, device, file):
                 str(int(split_nb[i].cpu().numpy())))
             final_result.append(string)
 
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        if is_skeleton:
+            neg_acc, cri_acc, pos_acc, neg_num, cri_num, pos_num = skeleton_accuracy(output, target)
+        else:
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
 
-        batch_size = images.shape[0]
         metric_logger.update(loss=loss.item())
-        metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
-        metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
+        if is_skeleton:
+            if neg_num > 0:
+                metric_logger.meters['neg_acc'].update(neg_acc, n=neg_num)
+            if cri_num > 0:
+                metric_logger.meters['cri_acc'].update(cri_acc, n=cri_num)
+            if pos_num > 0:
+                metric_logger.meters['pos_acc'].update(pos_acc, n=pos_num)
+        else:
+            batch_size = images.shape[0]
+            metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
+            metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
 
     if not os.path.exists(file):
         os.mknod(file)
     with open(file, 'w') as f:
-        f.write("{}, {}\n".format(acc1, acc5))
+        if is_skeleton:
+            f.write("{}, {}, {}\n".format(neg_acc, cri_acc, pos_acc))
+        else:
+            f.write("{}, {}\n".format(acc1, acc5))
         for line in final_result:
             f.write(line)
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    print(
-        '* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'
-        .format(
-            top1=metric_logger.acc1,
-            top5=metric_logger.acc5,
-            losses=metric_logger.loss))
+    if is_skeleton:
+        neg_acc = metric_logger.neg_acc.global_avg
+        cri_acc = metric_logger.cri_acc.global_avg
+        pos_acc = metric_logger.pos_acc.global_avg
+        avg_acc = (neg_acc + cri_acc + pos_acc) / 3
+        metric_logger.meters['avg_acc'].update(avg_acc, n=1)
+        print(f'* Acc@Avg {avg_acc:.3f} Acc@Neg {neg_acc:.3f} Acc@Cri {cri_acc:.3f} Acc@Pos {pos_acc:.3f} loss {metric_logger.loss.global_avg:.3f}')
+    else:
+        print(
+            '* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'
+            .format(
+                top1=metric_logger.acc1,
+                top5=metric_logger.acc5,
+                losses=metric_logger.loss))
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 

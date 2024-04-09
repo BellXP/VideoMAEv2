@@ -345,7 +345,8 @@ class VisionTransformer(nn.Module):
                  tubelet_size=2,
                  use_mean_pooling=True,
                  with_cp=False,
-                 cos_attn=False):
+                 cos_attn=False,
+                 **kwargs):
         super().__init__()
         self.num_classes = num_classes
         # num_features for consistency with other models

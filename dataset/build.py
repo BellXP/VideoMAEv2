@@ -37,15 +37,16 @@ def build_pretraining_dataset(args):
 
 
 def build_dataset(is_train, test_mode, args):
+    data_split_suffix = '' if args.data_split_seed == -1 else f'_{args.data_split_seed}'
     if is_train:
         mode = 'train'
-        anno_path = os.path.join(args.data_path, 'train.csv')
+        anno_path = os.path.join(args.data_path, f'train{data_split_suffix}.csv')
     elif test_mode:
         mode = 'test'
-        anno_path = os.path.join(args.data_path, 'val.csv')
+        anno_path = os.path.join(args.data_path, f'val{data_split_suffix}.csv')
     else:
         mode = 'validation'
-        anno_path = os.path.join(args.data_path, 'val.csv')
+        anno_path = os.path.join(args.data_path, f'val{data_split_suffix}.csv')
 
     if args.data_set == 'Kinetics-400':
         if not args.sparse_sample:
@@ -163,6 +164,27 @@ def build_dataset(is_train, test_mode, args):
             args=args)
 
         nb_classes = 174
+
+    elif args.data_set == 'Skeleton':
+        dataset = RawFrameClsDataset(
+            anno_path=anno_path,
+            data_root=args.data_root,
+            mode=mode,
+            clip_len=1,
+            num_segment=args.num_frames,
+            test_num_segment=args.test_num_segment,
+            test_num_crop=args.test_num_crop,
+            num_crop=1 if not test_mode else 3,
+            keep_aspect_ratio=True,
+            crop_size=args.input_size,
+            short_side_size=args.input_size,
+            new_height=args.input_size,
+            new_width=args.input_size,
+            filename_tmpl=args.fname_tmpl,
+            start_idx=args.start_idx,
+            use_skeleton_image_loader=True,
+            args=args)
+        nb_classes = args.nb_classes
 
     elif args.data_set == 'UCF101':
         dataset = VideoClsDataset(
