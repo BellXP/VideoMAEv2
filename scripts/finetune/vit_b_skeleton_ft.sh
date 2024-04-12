@@ -42,4 +42,5 @@ python -u -m torch.distributed.launch --nproc_per_node=2 \
         --test_num_segment 1 \
         --test_num_crop 2 \
         ${PY_ARGS} \
+        --normed_depth \
         # --enable_deepspeed

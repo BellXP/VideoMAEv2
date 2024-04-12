@@ -2,6 +2,7 @@ import os
 import torch
 import argparse
 import numpy as np
+from PIL import Image
 
 from timm.models import create_model
 
@@ -24,6 +25,7 @@ def get_args():
     parser.add_argument('--resume', default='', help='checkpoint path')
     parser.add_argument('--use_mean_pooling', action='store_true')
     parser.add_argument('--normed_depth', action='store_true')
+    parser.add_argument('--sample_depth', action='store_true')
     parser.set_defaults(use_mean_pooling=True)
     parser.add_argument('--device', default='cuda')
 
@@ -146,9 +148,20 @@ def main(args):
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    assert len(os.listdir(args.input_path)) == 300
-    tick = 300 / float(args.num_frames)
-    sample_indexes = [int(tick * x) for x in range(args.num_frames)]
+    sample_frame_num = len(os.listdir(args.input_path))
+    tick = sample_frame_num / float(args.num_frames)
+    if args.sample_depth:
+        depth_mean_list = []
+        for idx in range(sample_frame_num):
+            frame_fname = os.path.join(args.input_path, args.fname_tmpl.format(idx))
+            depth_mean = np.asarray(Image.open(frame_fname)).mean()
+            depth_mean_list.append(depth_mean)
+        indexed_frames = [(depth, index) for index, depth in enumerate(depth_mean_list)]
+        sorted_frames = sorted(indexed_frames, key=lambda x: x[0])
+        sample_indexes = [sorted_frames[int(tick * x)][1] for x in range(args.num_frames)]
+        sample_indexes = sorted(sample_indexes)
+    else:
+        sample_indexes = [int(tick * x) for x in range(args.num_frames)]
     imgs = []
     for idx in sample_indexes:
         frame_fname = os.path.join(args.input_path, args.fname_tmpl.format(idx))

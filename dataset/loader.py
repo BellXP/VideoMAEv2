@@ -70,8 +70,14 @@ def get_skeleton_image_loader():
     std=[0.229, 0.224, 0.225]
 
     def norm_depth_image(img):
-        img_range = img.max() - img.min()
-        img = img / img_range
+        max_depth = img.max()
+        img_copy = img.copy()
+        img_copy[img_copy == 0] = max_depth + 1
+        min_depth = img_copy.min()
+        depth_range = max_depth - min_depth
+        if depth_range > 0:
+            img[img != 0] -= min_depth
+            img = img / depth_range
         img = img * std + mean
         return img
 
@@ -81,7 +87,7 @@ def get_skeleton_image_loader():
         if dsize is not None and (y_range != dsize[0] or x_range != dsize[1]):
             img_np = interpolate_img(img_np, (y_range, x_range), dsize)
         img_np = np.repeat(np.expand_dims(img_np, axis=2), 3, axis=2)
-        img_np = norm_depth_image(img_np)
+        img_np = norm_depth_image(img_np).astype(np.float32)
         return img_np
 
     return _loader

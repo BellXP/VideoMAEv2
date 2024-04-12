@@ -182,7 +182,7 @@ def build_dataset(is_train, test_mode, args):
             new_width=args.input_size,
             filename_tmpl=args.fname_tmpl,
             start_idx=args.start_idx,
-            use_skeleton_image_loader=True,
+            use_skeleton_image_loader=args.normed_depth,
             args=args)
         nb_classes = args.nb_classes
 

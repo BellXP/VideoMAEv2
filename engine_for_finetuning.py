@@ -89,16 +89,9 @@ def train_one_epoch(model: torch.nn.Module,
             samples, targets = mixup_fn(samples, targets)
             samples = samples.view(B, C, T, H, W)
 
-        if loss_scaler is None:
-            samples = samples.half()
-            loss, output = train_class_batch(model, samples, targets,
-                                             criterion)
-        else:
-            torch_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-            samples = samples.to(torch_dtype)
-            with torch.cuda.amp.autocast(dtype=torch_dtype):
-                loss, output = train_class_batch(model, samples, targets,
-                                                 criterion)
+        torch_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        with torch.cuda.amp.autocast(dtype=torch_dtype):
+            loss, output = train_class_batch(model, samples, targets, criterion)
 
         loss_value = loss.item()
 

@@ -397,6 +397,9 @@ def get_args():
     parser.add_argument(
         '--classifier_only', action='store_true', help='only tune the classifier')
 
+    parser.add_argument(
+        '--normed_depth', action='store_true', help='use normalized depth value other than pixel value')
+
     known_args, _ = parser.parse_known_args()
 
     if known_args.enable_deepspeed:
