@@ -149,28 +149,49 @@ def main(args):
     ])
 
     sample_frame_num = len(os.listdir(args.input_path))
-    tick = sample_frame_num / float(args.num_frames)
     if args.sample_depth:
-        depth_mean_list = []
+        depth_value_list = []
         for idx in range(sample_frame_num):
             frame_fname = os.path.join(args.input_path, args.fname_tmpl.format(idx))
-            depth_mean = np.asarray(Image.open(frame_fname)).mean()
-            depth_mean_list.append(depth_mean)
-        indexed_frames = [(depth, index) for index, depth in enumerate(depth_mean_list)]
-        sorted_frames = sorted(indexed_frames, key=lambda x: x[0])
-        sample_indexes = [sorted_frames[int(tick * x)][1] for x in range(args.num_frames)]
-        sample_indexes = sorted(sample_indexes)
-    else:
-        sample_indexes = [int(tick * x) for x in range(args.num_frames)]
-    imgs = []
-    for idx in sample_indexes:
-        frame_fname = os.path.join(args.input_path, args.fname_tmpl.format(idx))
-        imgs.append(image_loader(frame_fname, (args.input_size, args.input_size)))
-    imgs = np.array(imgs)
-    eval_sample = data_transform(imgs).unsqueeze(0).to(device)
+            depth_image = np.asarray(Image.open(frame_fname))
+            non_zero_indexes = np.where(depth_image != 0)
+            depth_value = np.mean(depth_image[non_zero_indexes])
+            depth_value_list.append(depth_value)
 
-    model_output = model(eval_sample)
-    class_idx = model_output.max(1)[1].item()
+        depth_lists = []
+        sublist = []
+        for index, depth in enumerate(depth_value_list):
+            if depth > 1700 and depth < 3800:
+                sublist.append((depth, index))
+                continue
+            if len(sublist) > 0:
+                depth_lists.append(sublist)
+                sublist = []
+        depth_lists = [x for x in depth_lists if len(x) >= args.num_frames]
+
+        eval_sample = []
+        for depth_list in depth_lists:
+            tick = len(depth_list) / float(args.num_frames)
+            sample_indexes = [depth_list[int(tick * x)][1] for x in range(args.num_frames)]
+            imgs = []
+            for idx in sample_indexes:
+                frame_fname = os.path.join(args.input_path, args.fname_tmpl.format(idx))
+                imgs.append(image_loader(frame_fname, (args.input_size, args.input_size)))
+            imgs = np.array(imgs)
+            eval_sample.append(imgs)
+        eval_sample = torch.stack([data_transform(x) for x in eval_sample]).to(device)
+    else:
+        tick = sample_frame_num / float(args.num_frames)
+        sample_indexes = [int(tick * x) for x in range(args.num_frames)]
+        imgs = []
+        for idx in sample_indexes:
+            frame_fname = os.path.join(args.input_path, args.fname_tmpl.format(idx))
+            imgs.append(image_loader(frame_fname, (args.input_size, args.input_size)))
+        imgs = np.array(imgs)
+        eval_sample = data_transform(imgs).unsqueeze(0).to(device)
+
+    model_output = model(eval_sample).sum(0)
+    class_idx = model_output.max(0)[1].item()
     class_dict = {0: 'Neg', 1: 'Cri', 2: 'Pos'}
     print(f"The class of {args.input_path} is {class_dict[class_idx]}")
 
